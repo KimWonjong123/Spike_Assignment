@@ -7,7 +7,8 @@
 
 bool b_main = false;
 bool b_trap = false;
-uint64_t cycle_count;
+uint64_t cycle_count = 0;
+uint64_t inst_count = 0;
 
 struct insn_t *IDinsn = NULL;
 struct insn_t *EXinsn = NULL;
@@ -517,18 +518,20 @@ void processor_t::step(size_t n)
         // Main simulation loop, fast path.
         for (auto ic_entry = _mmu->access_icache(pc); ; ) {
 	  auto fetch = ic_entry->data;
-          cycle_count++;
           pc = execute_insn(this, pc, fetch);
           if (pc == 0x0000000000010178) {
             b_main = true;
           }
+          if (b_main) {
+	    cycle_count++;
+	    inst_count++;
+            update_pipeline(fetch.insn);
+          }
           if (pc == 0x000000000001017C) {
             flush_pipeline();
-            printf("%ld\n", cycle_count);
+            printf("cycle count: %ld\n", cycle_count);
+            printf("inst count: %ld\n", inst_count);
             b_main = false;
-          }
-          if (b_main) {
-            update_pipeline(fetch.insn);
           }
           ic_entry = ic_entry->next;
           if (unlikely(ic_entry->tag != pc))
