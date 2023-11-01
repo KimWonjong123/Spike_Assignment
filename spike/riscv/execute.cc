@@ -5,6 +5,237 @@
 #include "disasm.h"
 #include <cassert>
 
+bool b_main = false;
+bool b_trap = false;
+uint64_t cycle_count;
+
+struct insn_t *IDinsn = NULL;
+struct insn_t *EXinsn = NULL;
+struct insn_t *MEMinsn = NULL;
+struct insn_t *WBinsn = NULL;
+
+const char *decode_inst(insn_t &insn) {
+    uint64_t opcode = insn.opcode();
+    uint64_t funct3 = insn.funct3();
+    uint64_t funct7 = insn.funct7();
+    char type;
+    switch (opcode) {
+        case 0x33:
+            type = 'R';
+            break;
+        case 0x73:
+            type = 'E';
+            break;
+        case 0x13:
+            type = 'i';
+            break;
+        case 0x1b:
+            type = 'w';
+            break;
+        case 0x3b:
+            type = 'W';
+            break;
+        case 0x03:
+            type = 'I';
+            break;
+        case 0x23:
+            type = 'S';
+            break;
+        case 0x63:
+            type = 'B';
+            break;
+        case 0x6f:
+            return "jal";
+        case 0x67:
+            return "jalr";
+        case 0x17:
+            return "auipc";
+        case 0x37:
+            return "lui";
+        case 0x0f:
+            type = 'F';
+            break;
+        default:
+            return "unknown";
+    }
+
+    switch (type) {
+        case 'R':
+            switch (funct3) {
+                case 0x00:
+                    return (funct7 == 0x00 ? "add" : "sub");
+                case 0x07:
+                    return "and";
+                case 0x06:
+                    return "or";
+                case 0x04:
+                    return "xor";
+                case 0x01:
+                    return "sll";
+                case 0x05:
+                    return (funct7 == 0x00 ? "srl" : "sra");
+                case 0x02:
+                    return "slt";
+                case 0x03:
+                    return "sltu";
+                default:
+                    return "unknown";
+            }
+        case 'i':
+            switch (funct3) {
+                case 0x00:
+                    return "addi";
+                case 0x07:
+                    return "andi";
+                case 0x06:
+                    return "ori";
+                case 0x04:
+                    return "xori";
+                case 0x01:
+                    return "slli";
+                case 0x05:
+                    return (funct7 == 0x00 ? "srli" : "srai");
+                case 0x02:
+                    return "slti";
+                case 0x03:
+                    return "sltiu";
+                default:
+                    return "unknown";
+            }
+        case 'I':
+            switch (funct3) {
+                case 0x00:
+                    return "lb";
+                case 0x01:
+                    return "lh";
+                case 0x02:
+                    return "lw";
+                case 0x03:
+                    return "ld";
+                case 0x04:
+                    return "lbu";
+                case 0x05:
+                    return "lhu";
+                case 0x06:
+                    return "lwu";
+                default:
+                    return "unknown";
+            }
+        case 'S':
+            switch (funct3) {
+                case 0x00:
+                    return "sb";
+                case 0x01:
+                    return "sh";
+                case 0x02:
+                    return "sw";
+                case 0x03:
+                    return "sd";
+                default:
+                    return "unknown";
+            }
+        case 'B':
+            switch (funct3) {
+                case 0x00:
+                    return "beq";
+                case 0x01:
+                    return "bne";
+                case 0x04:
+                    return "blt";
+                case 0x05:
+                    return "bge";
+                case 0x06:
+                    return "bltu";
+                case 0x07:
+                    return "bgeu";
+                default:
+                    return "unknown";
+            }
+        case 'F':
+            return (funct3 == 0x00 ? "fence" : "fence.i");
+        case 'E':
+            switch (funct3) {
+                case 0x00:
+                    return (insn.i_imm() == 0x0 ? "ecall" : "ebreak");
+                case 0x01:
+                    return "csrrw";
+                case 0x02:
+                    return "csrrs";
+                case 0x03:
+                    return "csrrc";
+                case 0x05:
+                    return "csrrwi";
+                case 0x06:
+                    return "csrrsi";
+                case 0x07:
+                    return "csrrci";
+                default:
+                    return "unknown";
+            }
+        case 'w':
+            switch (funct3) {
+                case 0x00:
+                    return "addiw";
+                case 0x01:
+                    return "slliw";
+                case 0x05:
+                    return (funct7 == 0x00 ? "srliw" : "sraiw");
+                default:
+                    return "unknown";
+            }
+        case 'W':
+            switch (funct3) {
+                case 0x00:
+                    return (funct7 == 0x00 ? "addw" : "subw");
+                case 0x01:
+                    return "sllw";
+                case 0x05:
+                    return (funct7 == 0x00 ? "srlw" : "sraw");
+                default:
+                    return "unknown";
+            }
+    }
+
+    return "unknown";
+}
+
+bool detect_forwarding() { return false; }
+
+bool detect_hazard() { return false; }
+
+void update_pipeline(insn_t &insn) {
+  if (detect_hazard()) {
+      ;
+  }
+  if (detect_forwarding()) {
+      ;
+  }
+  WBinsn = MEMinsn;
+  MEMinsn = EXinsn;
+  EXinsn = IDinsn;
+  IDinsn = &insn;
+  cycle_count++;
+}
+
+void flush_pipeline() {
+  if (IDinsn != NULL) {
+    cycle_count += 4;
+    IDinsn = NULL;
+  }
+  else if (EXinsn != NULL) {
+    cycle_count += 2;
+    EXinsn = NULL;
+  }
+  else if (MEMinsn != NULL) {
+    cycle_count += 1;
+    MEMinsn = NULL;
+  }
+  else if (WBinsn != NULL) {
+    cycle_count += 0;
+    WBinsn = NULL;
+  }
+}
+
 #ifdef RISCV_ENABLE_COMMITLOG
 static void commit_log_reset(processor_t* p)
 {
@@ -285,8 +516,20 @@ void processor_t::step(size_t n)
       {
         // Main simulation loop, fast path.
         for (auto ic_entry = _mmu->access_icache(pc); ; ) {
-          auto fetch = ic_entry->data;
+	  auto fetch = ic_entry->data;
+          cycle_count++;
           pc = execute_insn(this, pc, fetch);
+          if (pc == 0x0000000000010178) {
+            b_main = true;
+          }
+          if (pc == 0x000000000001017C) {
+            flush_pipeline();
+            printf("%ld\n", cycle_count);
+            b_main = false;
+          }
+          if (b_main) {
+            update_pipeline(fetch.insn);
+          }
           ic_entry = ic_entry->next;
           if (unlikely(ic_entry->tag != pc))
             break;
