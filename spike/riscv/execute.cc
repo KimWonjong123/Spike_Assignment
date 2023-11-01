@@ -9,6 +9,8 @@ bool b_main = false;
 bool b_trap = false;
 uint64_t cycle_count = 0;
 uint64_t inst_count = 0;
+reg_t trap_ret;
+const char *MEMREAD[] = {"lb", "lh", "lw", "ld", "lbu", "lhu", "lwu"};
 
 struct insn_t *IDinsn = NULL;
 struct insn_t *EXinsn = NULL;
@@ -200,41 +202,67 @@ const char *decode_inst(insn_t &insn) {
     return "unknown";
 }
 
-bool detect_forwarding() { return false; }
+void print_pipe() {
+  printf("IDinsn = %s\n", IDinsn != NULL ? decode_inst(*IDinsn) : "nop");
+  printf("EXinsn = %s\n", EXinsn != NULL ? decode_inst(*EXinsn) : "nop");
+  printf("MEMinsn = %s\n", MEMinsn!= NULL ? decode_inst(*MEMinsn) : "nop");
+  printf("WBinsn = %s\n", WBinsn != NULL ? decode_inst(*WBinsn) : "nop");
+  printf("\n\n");
+}
 
-bool detect_hazard() { return false; }
+bool detect_data_hazard(insn_t &insn) {
+  // if (IDinsn) {
+  //   const char *name = decode_inst(*IDinsn);
+  //   bool b_mem_read = false;
+  //   for (int i = 0; i < 7; i++){
+  //     if (strcmp(name, MEMREAD[i]) == 0) {
+  //       b_mem_read = true;
+  //       break;
+  //     }
+  //   }
+  //   if (b_mem_read) {
+  //     if (IDinsn->rd() == insn.rs1() || IDinsn->rd() == insn.rs2()) {
+  //       return true;
+  //     }
+  //   }
+  // }
+  return false;
+}
 
-void update_pipeline(insn_t &insn) {
-  if (detect_hazard()) {
-      ;
-  }
-  if (detect_forwarding()) {
-      ;
-  }
+reg_t update_pipeline(insn_t &insn, reg_t old_pc, reg_t pc) {
+  delete (WBinsn);
   WBinsn = MEMinsn;
   MEMinsn = EXinsn;
-  EXinsn = IDinsn;
-  IDinsn = &insn;
-  cycle_count++;
+  if (detect_data_hazard(insn)) {
+    printf("detect data hazard: pc = %lu\tinst = %s\t\n", old_pc, decode_inst(insn));
+    delete(EXinsn);
+    EXinsn = NULL;
+    return old_pc;
+  }
+  else {
+    EXinsn = IDinsn;
+    IDinsn = new insn_t(insn);
+    return pc;
+  }
 }
 
 void flush_pipeline() {
   if (IDinsn != NULL) {
     cycle_count += 4;
-    IDinsn = NULL;
   }
   else if (EXinsn != NULL) {
     cycle_count += 2;
-    EXinsn = NULL;
   }
   else if (MEMinsn != NULL) {
     cycle_count += 1;
-    MEMinsn = NULL;
   }
   else if (WBinsn != NULL) {
     cycle_count += 0;
-    WBinsn = NULL;
   }
+  delete(IDinsn);
+  delete(EXinsn);
+  delete(MEMinsn);
+  delete(WBinsn);
 }
 
 #ifdef RISCV_ENABLE_COMMITLOG
@@ -467,6 +495,7 @@ void processor_t::step(size_t n)
   while (n > 0) {
     size_t instret = 0;
     reg_t pc = state.pc;
+    reg_t old_pc;
     mmu_t* _mmu = mmu;
 
     #define advance_pc() \
@@ -517,15 +546,21 @@ void processor_t::step(size_t n)
       {
         // Main simulation loop, fast path.
         for (auto ic_entry = _mmu->access_icache(pc); ; ) {
-	  auto fetch = ic_entry->data;
+          auto fetch = ic_entry->data;
+          old_pc = pc;
+          if(b_trap && old_pc == trap_ret) {
+            b_trap = false;
+          }
           pc = execute_insn(this, pc, fetch);
           if (pc == 0x0000000000010178) {
             b_main = true;
           }
-          if (b_main) {
-	    cycle_count++;
-	    inst_count++;
-            update_pipeline(fetch.insn);
+          if (b_main && !b_trap) {
+              cycle_count++;
+              inst_count++;
+              printf("clock cycle:%lu\n", cycle_count);
+              printf("%s\told_pc: %lx\tpc: %lx\n", decode_inst(fetch.insn), old_pc, pc);
+              pc = update_pipeline(fetch.insn, old_pc, pc);
           }
           if (pc == 0x000000000001017C) {
             flush_pipeline();
@@ -547,6 +582,32 @@ void processor_t::step(size_t n)
     }
     catch(trap_t& t)
     {
+      if (b_main) {
+        // trap_occured_pc = old_pc;
+        insn_t insn = _mmu->access_icache(old_pc)->data.insn;
+        printf("insn: %s\told_pc: %lx\tpc: %lx\n\n", decode_inst(insn), old_pc, pc);
+        const char *name = decode_inst(insn);
+        b_trap = true;
+        if(strcmp(name, "ecall") == 0) {
+          trap_ret = pc + 0x4;
+          delete (WBinsn);
+          WBinsn = MEMinsn;
+          MEMinsn = EXinsn;
+          EXinsn = IDinsn;
+          IDinsn = NULL;
+          cycle_count++;
+        }
+        else {
+          trap_ret = pc;
+        }
+        print_pipe();
+        // // b_trap = true;
+        // // b_trap = true;
+        // // const char* name = decode_inst(insn);
+        // // if (strcmp(name, "sret") == 0 || strcmp(name, "mret") == 0)
+        // //   b_trap = false;
+        // // pc = update_pipeline(insn, old_pc, pc);
+      }
       take_trap(t, pc);
       n = instret;
 
@@ -598,3 +659,4 @@ void processor_t::step(size_t n)
     n -= instret;
   }
 }
+
