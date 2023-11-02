@@ -12,10 +12,10 @@ uint64_t inst_count = 0;
 reg_t trap_ret;
 const char *MEMREAD[] = {"lb", "lh", "lw", "ld", "lbu", "lhu", "lwu"};
 
-struct insn_t *IDinsn = NULL;
-struct insn_t *EXinsn = NULL;
-struct insn_t *MEMinsn = NULL;
-struct insn_t *WBinsn = NULL;
+struct insn_t *IFIDinsn = NULL;
+struct insn_t *IDEXinsn = NULL;
+struct insn_t *EXMEMinsn = NULL;
+struct insn_t *MEMWBinsn = NULL;
 
 const char *decode_inst(insn_t &insn) {
     uint64_t opcode = insn.opcode();
@@ -203,66 +203,77 @@ const char *decode_inst(insn_t &insn) {
 }
 
 void print_pipe() {
-  printf("IDinsn = %s\n", IDinsn != NULL ? decode_inst(*IDinsn) : "nop");
-  printf("EXinsn = %s\n", EXinsn != NULL ? decode_inst(*EXinsn) : "nop");
-  printf("MEMinsn = %s\n", MEMinsn!= NULL ? decode_inst(*MEMinsn) : "nop");
-  printf("WBinsn = %s\n", WBinsn != NULL ? decode_inst(*WBinsn) : "nop");
+  printf("IFIDinsn = %s\n", IFIDinsn != NULL ? decode_inst(*IFIDinsn) : "nop");
+  printf("IDEXinsn = %s\n", IDEXinsn != NULL ? decode_inst(*IDEXinsn) : "nop");
+  printf("EXMEMinsn = %s\n", EXMEMinsn != NULL ? decode_inst(*EXMEMinsn) : "nop");
+  printf("MEMWBinsn = %s\n", MEMWBinsn!= NULL ? decode_inst(*MEMWBinsn) : "nop");
   printf("\n\n");
 }
 
-bool detect_data_hazard(insn_t &insn) {
-  // if (IDinsn) {
-  //   const char *name = decode_inst(*IDinsn);
-  //   bool b_mem_read = false;
-  //   for (int i = 0; i < 7; i++){
-  //     if (strcmp(name, MEMREAD[i]) == 0) {
-  //       b_mem_read = true;
-  //       break;
-  //     }
-  //   }
-  //   if (b_mem_read) {
-  //     if (IDinsn->rd() == insn.rs1() || IDinsn->rd() == insn.rs2()) {
-  //       return true;
-  //     }
-  //   }
-  // }
+bool is_rs2(insn_t &insn) {
+  uint64_t opcode = insn.opcode();
+  
+  // only R, S, B type instruction has rs2
+  switch (opcode) {
+    case 0x23:
+    case 0x33:
+    case 0x63:
+      return true;
+    default:
+      return false;
+  }
+}
+
+bool detect_data_hazard() {
+  if (IFIDinsn && IDEXinsn) {
+    const char *name = decode_inst(*IDEXinsn);
+    bool b_mem_read = false;
+    for (int i = 0; i < 7; i++){
+      if (strcmp(name, MEMREAD[i]) == 0) {
+        b_mem_read = true;
+        break;
+      }
+    }
+    if (b_mem_read) {
+      if (IDEXinsn->rd() == IFIDinsn->rs1() || (is_rs2(*IFIDinsn) && IDEXinsn->rd() == IFIDinsn->rs2())) {
+        return true;
+      }
+    }
+  }
   return false;
 }
 
 reg_t update_pipeline(insn_t &insn, reg_t old_pc, reg_t pc) {
-  delete (WBinsn);
-  WBinsn = MEMinsn;
-  MEMinsn = EXinsn;
-  if (detect_data_hazard(insn)) {
-    printf("detect data hazard: pc = %lu\tinst = %s\t\n", old_pc, decode_inst(insn));
-    delete(EXinsn);
-    EXinsn = NULL;
+  delete (MEMWBinsn);
+  MEMWBinsn = EXMEMinsn;
+  EXMEMinsn = IDEXinsn;
+  if (detect_data_hazard()) {
+    printf("detect data hazard: pc = %lx\tinst = %s\n\n\n", old_pc, decode_inst(insn));
+    IDEXinsn = NULL;
+    print_pipe();
     return old_pc;
   }
   else {
-    EXinsn = IDinsn;
-    IDinsn = new insn_t(insn);
+    IDEXinsn = IFIDinsn;
+    IFIDinsn = new insn_t(insn);
     return pc;
   }
 }
 
 void flush_pipeline() {
-  if (IDinsn != NULL) {
+  if (IFIDinsn != NULL) {
     cycle_count += 4;
-  }
-  else if (EXinsn != NULL) {
+  } else if (IDEXinsn != NULL) {
+    cycle_count += 3;
+  } else if (EXMEMinsn != NULL) {
     cycle_count += 2;
-  }
-  else if (MEMinsn != NULL) {
+  } else if (MEMWBinsn != NULL) {
     cycle_count += 1;
   }
-  else if (WBinsn != NULL) {
-    cycle_count += 0;
-  }
-  delete(IDinsn);
-  delete(EXinsn);
-  delete(MEMinsn);
-  delete(WBinsn);
+  delete(IFIDinsn);
+  delete(IDEXinsn);
+  delete(EXMEMinsn);
+  delete(MEMWBinsn);
 }
 
 #ifdef RISCV_ENABLE_COMMITLOG
@@ -556,10 +567,11 @@ void processor_t::step(size_t n)
             b_main = true;
           }
           if (b_main && !b_trap) {
+              std::cout << disassembler->disassemble(fetch.insn);
+              printf("\tinsn: %s", decode_inst(fetch.insn));
+              printf("\told_pc = %lx\n", old_pc);
               cycle_count++;
               inst_count++;
-              printf("clock cycle:%lu\n", cycle_count);
-              printf("%s\told_pc: %lx\tpc: %lx\n", decode_inst(fetch.insn), old_pc, pc);
               pc = update_pipeline(fetch.insn, old_pc, pc);
           }
           if (pc == 0x000000000001017C) {
@@ -583,30 +595,21 @@ void processor_t::step(size_t n)
     catch(trap_t& t)
     {
       if (b_main) {
-        // trap_occured_pc = old_pc;
         insn_t insn = _mmu->access_icache(old_pc)->data.insn;
-        printf("insn: %s\told_pc: %lx\tpc: %lx\n\n", decode_inst(insn), old_pc, pc);
         const char *name = decode_inst(insn);
         b_trap = true;
         if(strcmp(name, "ecall") == 0) {
           trap_ret = pc + 0x4;
-          delete (WBinsn);
-          WBinsn = MEMinsn;
-          MEMinsn = EXinsn;
-          EXinsn = IDinsn;
-          IDinsn = NULL;
+          delete (MEMWBinsn);
+          MEMWBinsn = EXMEMinsn;
+          EXMEMinsn = IDEXinsn;
+          IDEXinsn = IFIDinsn;
+          IFIDinsn = NULL;
           cycle_count++;
         }
         else {
           trap_ret = pc;
         }
-        print_pipe();
-        // // b_trap = true;
-        // // b_trap = true;
-        // // const char* name = decode_inst(insn);
-        // // if (strcmp(name, "sret") == 0 || strcmp(name, "mret") == 0)
-        // //   b_trap = false;
-        // // pc = update_pipeline(insn, old_pc, pc);
       }
       take_trap(t, pc);
       n = instret;
