@@ -13,10 +13,10 @@ reg_t trap_ret;
 reg_t branch_pc;
 const char *MEMREAD[] = {"lb", "lh", "lw", "ld", "lbu", "lhu", "lwu"};
 
-struct insn_fetch_t *IFIDinsn = NULL;
-struct insn_fetch_t *IDEXinsn = NULL;
-struct insn_fetch_t *EXMEMinsn = NULL;
-struct insn_fetch_t *MEMWBinsn = NULL;
+struct insn_t *IFIDinsn = NULL;
+struct insn_t *IDEXinsn = NULL;
+struct insn_t *EXMEMinsn = NULL;
+struct insn_t *MEMWBinsn = NULL;
 
 #ifdef RISCV_ENABLE_COMMITLOG
 static void commit_log_reset(processor_t* p)
@@ -412,11 +412,32 @@ inline const char *decode_inst(insn_t &insn) {
 }
 
 inline void print_pipe() {
-  printf("IFIDinsn = %s\n", IFIDinsn != NULL ? decode_inst(IFIDinsn->insn) : "nop");
-  printf("IDEXinsn = %s\n", IDEXinsn != NULL ? decode_inst(IDEXinsn->insn) : "nop");
-  printf("EXMEMinsn = %s\n", EXMEMinsn != NULL ? decode_inst(EXMEMinsn->insn) : "nop");
-  printf("MEMWBinsn = %s\n", MEMWBinsn!= NULL ? decode_inst(MEMWBinsn->insn) : "nop");
+  printf("IFIDinsn = %s\n", IFIDinsn != NULL ? decode_inst(*IFIDinsn) : "nop");
+  printf("IDEXinsn = %s\n", IDEXinsn != NULL ? decode_inst(*IDEXinsn) : "nop");
+  printf("EXMEMinsn = %s\n", EXMEMinsn != NULL ? decode_inst(*EXMEMinsn) : "nop");
+  printf("MEMWBinsn = %s\n", MEMWBinsn!= NULL ? decode_inst(*MEMWBinsn) : "nop");
   printf("\n\n");
+}
+
+inline bool is_rs1(insn_t &insn) {
+  uint64_t opcode = insn.opcode();
+  uint64_t func3 = insn.funct3();
+  switch (opcode) {
+    case 0x17:
+    case 0x37:
+    case 0x67:
+    case 0x0f:
+      return false;
+    case 0x73:
+      if(func3 == 0x00 || func3 == 0x05 || func3 == 0x06 || func3 == 0x07) {
+        return false;
+      }
+      else {
+        return true;
+      }
+    default:
+      return true;
+  }
 }
 
 inline bool is_rs2(insn_t &insn) {
@@ -426,6 +447,7 @@ inline bool is_rs2(insn_t &insn) {
   switch (opcode) {
     case 0x23:
     case 0x33:
+    case 0x3b:
     case 0x63:
       return true;
     default:
@@ -434,17 +456,11 @@ inline bool is_rs2(insn_t &insn) {
 }
 
 inline bool detect_data_hazard() {
-  if (IFIDinsn && IDEXinsn) {
-    const char *name = decode_inst(IDEXinsn->insn);
-    bool b_mem_read = false;
-    for (int i = 0; i < 7; i++){
-      if (strcmp(name, MEMREAD[i]) == 0) {
-        b_mem_read = true;
-        break;
-      }
-    }
+  if (IFIDinsn != NULL && IDEXinsn != NULL) {
+    const char *name = decode_inst(*IDEXinsn);
+    bool b_mem_read = (name[0] == 'l' && strncmp(name, "lui", 3) != 0) ? true : false;
     if (b_mem_read) {
-      if (IDEXinsn->insn.rd() == IFIDinsn->insn.rs1() || (is_rs2(IFIDinsn->insn) && IDEXinsn->insn.rd() == IFIDinsn->insn.rs2())) {
+      if ((is_rs1(*IFIDinsn) && IDEXinsn->rd() == IFIDinsn->rs1()) || (is_rs2(*IFIDinsn) && IDEXinsn->rd() == IFIDinsn->rs2())) {
         return true;
       }
     }
@@ -452,64 +468,86 @@ inline bool detect_data_hazard() {
   return false;
 }
 
-inline bool detect_control_hazard(reg_t old_pc, reg_t pc, processor_t *p) {
-  uint64_t opcode = IFIDinsn->insn.opcode();
+inline bool detect_control_hazard(reg_t old_pc) {
+  uint64_t opcode = IFIDinsn->opcode();
   if (opcode == 0x63 && ((branch_pc + 0x4) != old_pc)) {
     return true;
   }
   return false;
 }
 
-inline reg_t update_pipeline(insn_fetch_t &fetch, reg_t old_pc, reg_t pc, processor_t *p) {
-  delete (MEMWBinsn);
-  MEMWBinsn = EXMEMinsn;
-  EXMEMinsn = IDEXinsn;
-  uint64_t opcode = fetch.insn.opcode();
-  if (opcode == 0x63) {
-    printf("branch detected\tpc:%lx\n", old_pc);
-    branch_pc = old_pc;
-  }
-  if (detect_data_hazard()) {
-    printf("data hazard detected\n");
-    IDEXinsn = NULL;
-    print_pipe();
-    return old_pc;
-  }
-  else {
-    if (IFIDinsn && detect_control_hazard(old_pc, pc, p)) { // if branch is taken
-      printf("control hazard detected\n");
-      // IDEXinsn = NULL;
-      delete (MEMWBinsn);
-      MEMWBinsn = IDEXinsn;
-      EXMEMinsn = IFIDinsn;
-      IDEXinsn = NULL;
-      IFIDinsn = new insn_fetch_t(fetch);
-      cycle_count++;
-      print_pipe();
-    }
-    else { // if branch is not taken
-      IDEXinsn = IFIDinsn;
-      IFIDinsn = new insn_fetch_t(fetch);
-      print_pipe();
-    }
-    return pc;
-  }
-}
-
 inline void flush_pipeline() {
   if (IFIDinsn != NULL) {
-    cycle_count += 4;
+      cycle_count += 4;
   } else if (IDEXinsn != NULL) {
-    cycle_count += 3;
+      cycle_count += 3;
   } else if (EXMEMinsn != NULL) {
-    cycle_count += 2;
+      cycle_count += 2;
   } else if (MEMWBinsn != NULL) {
-    cycle_count += 1;
+      cycle_count += 1;
   }
-  delete(IFIDinsn);
-  delete(IDEXinsn);
-  delete(EXMEMinsn);
-  delete(MEMWBinsn);
+  delete (IFIDinsn);
+  delete (IDEXinsn);
+  delete (EXMEMinsn);
+  delete (MEMWBinsn);
+}
+
+inline reg_t update_pipeline(insn_t &insn, reg_t old_pc, insn_fetch_t fetch, processor_t* p) {
+  if(b_trap) {
+    if (old_pc == trap_ret)
+      b_trap = false;
+  }
+  if (old_pc == 0x0000000000010178) {
+    b_main = true;
+    return execute_insn(p, old_pc, fetch);
+  }
+  if (old_pc == 0x000000000001017C) {
+    flush_pipeline();
+    printf("%ld\n", cycle_count);
+    b_main = false;
+    return execute_insn(p, old_pc, fetch);
+  }
+  if (b_main && !b_trap) {
+    cycle_count++;
+    inst_count++;
+
+    delete (MEMWBinsn);
+    MEMWBinsn = EXMEMinsn;
+    EXMEMinsn = IDEXinsn;
+    uint64_t opcode = insn.opcode();
+    if (opcode == 0x63) {
+      branch_pc = old_pc;
+    }
+    if (detect_data_hazard()) {
+      uint64_t opcode2 = IFIDinsn->opcode();
+      if (opcode == 0x63 || opcode == 0x67 || opcode == 0x6f) {  // if branch or jump, stall twice
+          delete (MEMWBinsn);
+          MEMWBinsn = EXMEMinsn;
+          EXMEMinsn = NULL;
+          IDEXinsn = NULL;
+          cycle_count++;
+      } else {  // otherwise, stall once
+          IDEXinsn = NULL;
+      }
+      return old_pc;
+    }
+    else {
+      if (IFIDinsn && detect_control_hazard(old_pc)) {  // if branch is taken
+          delete (MEMWBinsn);
+          MEMWBinsn = EXMEMinsn;
+          EXMEMinsn = IFIDinsn;
+          IDEXinsn = NULL;
+          IFIDinsn = new insn_t(insn);
+          cycle_count++;
+      } else {  // if branch is not taken
+          IDEXinsn = IFIDinsn;
+          IFIDinsn = new insn_t(insn);
+      }
+      return execute_insn(p, old_pc, fetch);
+    }
+  }
+
+  return execute_insn(p, old_pc, fetch);
 }
 
 bool processor_t::slow_path()
@@ -587,25 +625,26 @@ void processor_t::step(size_t n)
         for (auto ic_entry = _mmu->access_icache(pc); ; ) {
           auto fetch = ic_entry->data;
           old_pc = pc;
-          if(b_trap && old_pc == trap_ret) {
-            b_trap = false;
-          }
-          pc = execute_insn(this, pc, fetch);
-          if (old_pc == 0x0000000000010178) {
-            b_main = true;
-          }
-          if (pc == 0x000000000001017C) {
-            flush_pipeline();
-            printf("cycle count: %ld\n", cycle_count);
-            printf("inst count: %ld\n", inst_count);
-            b_main = false;
-          }
-          if (b_main && !b_trap) {
-            printf("insn: %s\told_pc: %lx\tpc: %lx\n", decode_inst(fetch.insn), old_pc, pc);
-            cycle_count++;
-            inst_count++;
-            pc = update_pipeline(fetch, old_pc, pc, this);
-          }
+          pc = update_pipeline(fetch.insn, old_pc, fetch, this);
+          // old_pc = pc;
+          // if(b_trap) {
+          //   if (old_pc == trap_ret)
+          //     b_trap = false;
+          // }
+          // pc = execute_insn(this, pc, fetch);
+          // if (old_pc == 0x0000000000010178) {
+          //   b_main = true;
+          // }
+          // if (pc == 0x000000000001017C) {
+          //   flush_pipeline();
+          //   printf("%ld\n", cycle_count);
+          //   b_main = false;
+          // }
+          // if (b_main && !b_trap) {
+          //   cycle_count++;
+          //   inst_count++;
+          //   pc = update_pipeline(fetch.insn, old_pc, pc, fetch, this);
+          // }
           ic_entry = ic_entry->next;
           if (unlikely(ic_entry->tag != pc))
             break;
