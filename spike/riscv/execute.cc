@@ -5,18 +5,17 @@
 #include "disasm.h"
 #include <cassert>
 
-bool b_main = false;
-bool b_trap = false;
-uint64_t cycle_count = 0;
-uint64_t inst_count = 0;
-reg_t trap_ret;
-reg_t branch_pc;
-const char *MEMREAD[] = {"lb", "lh", "lw", "ld", "lbu", "lhu", "lwu"};
+bool b_main = false; // indicate whether we are in main function
+bool b_trap = false; // indicate whether we are in trap handler
+uint64_t cycle_count = 0; // count the number of cycles
+reg_t trap_ret; // address of the instruction where trap is taken
+reg_t branch_pc; // address of the instruction where branch is taken
+const char *MEMREAD[] = {"lb", "lh", "lw", "ld", "lbu", "lhu", "lwu"}; // memory read instructions
 
-struct insn_t *IFIDinsn = NULL;
-struct insn_t *IDEXinsn = NULL;
-struct insn_t *EXMEMinsn = NULL;
-struct insn_t *MEMWBinsn = NULL;
+struct insn_t *IFIDinsn = NULL; // instruction in IF/ID pipeline register
+struct insn_t *IDEXinsn = NULL; // instruction in ID/EX pipeline register
+struct insn_t *EXMEMinsn = NULL; // instruction in EX/MEM pipeline register
+struct insn_t *MEMWBinsn = NULL; // instruction in MEM/WB pipeline register
 
 #ifdef RISCV_ENABLE_COMMITLOG
 static void commit_log_reset(processor_t* p)
@@ -226,11 +225,14 @@ static inline reg_t execute_insn(processor_t* p, reg_t pc, insn_fetch_t fetch)
   return npc;
 }
 
+// decode a 32-bit instruction
 inline const char *decode_inst(insn_t &insn) {
     uint64_t opcode = insn.opcode();
     uint64_t funct3 = insn.funct3();
     uint64_t funct7 = insn.funct7();
-    char type;
+    char type; // type of instruction
+
+    // decode opcode
     switch (opcode) {
         case 0x33:
             type = 'R';
@@ -271,6 +273,7 @@ inline const char *decode_inst(insn_t &insn) {
             return "unknown";
     }
 
+    // decode funct3 and funct7 based on opcode
     switch (type) {
         case 'R':
             switch (funct3) {
@@ -411,14 +414,7 @@ inline const char *decode_inst(insn_t &insn) {
     return "unknown";
 }
 
-inline void print_pipe() {
-  printf("IFIDinsn = %s\n", IFIDinsn != NULL ? decode_inst(*IFIDinsn) : "nop");
-  printf("IDEXinsn = %s\n", IDEXinsn != NULL ? decode_inst(*IDEXinsn) : "nop");
-  printf("EXMEMinsn = %s\n", EXMEMinsn != NULL ? decode_inst(*EXMEMinsn) : "nop");
-  printf("MEMWBinsn = %s\n", MEMWBinsn!= NULL ? decode_inst(*MEMWBinsn) : "nop");
-  printf("\n\n");
-}
-
+// check whether the instruction has rs1 field or not based on opcode and funct3 part
 inline bool is_rs1(insn_t &insn) {
   uint64_t opcode = insn.opcode();
   uint64_t func3 = insn.funct3();
@@ -440,6 +436,7 @@ inline bool is_rs1(insn_t &insn) {
   }
 }
 
+// check whether the instruction has rs2 field or not based on opcode
 inline bool is_rs2(insn_t &insn) {
   uint64_t opcode = insn.opcode();
   
@@ -455,11 +452,16 @@ inline bool is_rs2(insn_t &insn) {
   }
 }
 
+// check whether data hazard occurs
 inline bool detect_data_hazard() {
   if (IFIDinsn != NULL && IDEXinsn != NULL) {
     const char *name = decode_inst(*IDEXinsn);
+
+    // check whether IDEXinsn is load instruction
     bool b_mem_read = (name[0] == 'l' && strncmp(name, "lui", 3) != 0) ? true : false;
     if (b_mem_read) {
+
+      // check data hazard between IDEXinsn and IFIDinsn
       if ((is_rs1(*IFIDinsn) && IDEXinsn->rd() == IFIDinsn->rs1()) || (is_rs2(*IFIDinsn) && IDEXinsn->rd() == IFIDinsn->rs2())) {
         return true;
       }
@@ -468,14 +470,17 @@ inline bool detect_data_hazard() {
   return false;
 }
 
+// check whether control hazard occurs
 inline bool detect_control_hazard(reg_t old_pc) {
   uint64_t opcode = IFIDinsn->opcode();
-  if (opcode == 0x63 && ((branch_pc + 0x4) != old_pc)) {
+  
+  if (opcode == 0x63 && ((branch_pc + 0x4) != old_pc)) { // if branch is taken, control hazard occurs
     return true;
   }
-  return false;
+  return false; // otherwise, control hazard does not occur
 }
 
+// flush pipeline when returning from main function
 inline void flush_pipeline() {
   if (IFIDinsn != NULL) {
       cycle_count += 4;
@@ -492,62 +497,77 @@ inline void flush_pipeline() {
   delete (MEMWBinsn);
 }
 
+// update pipeline
 inline reg_t update_pipeline(insn_t &insn, reg_t old_pc, insn_fetch_t fetch, processor_t* p) {
+  // check whether trap handler is over
   if(b_trap) {
     if (old_pc == trap_ret)
       b_trap = false;
   }
+
+  // check whether we are entering main function
   if (old_pc == 0x0000000000010178) {
     b_main = true;
     return execute_insn(p, old_pc, fetch);
   }
+
+  // check whether we are returning from main function
   if (old_pc == 0x000000000001017C) {
     flush_pipeline();
     printf("%ld\n", cycle_count);
     b_main = false;
     return execute_insn(p, old_pc, fetch);
   }
+
+  // check whether we are in main function and not in trap handler
   if (b_main && !b_trap) {
     cycle_count++;
-    inst_count++;
 
+    // update pipeline
     delete (MEMWBinsn);
     MEMWBinsn = EXMEMinsn;
     EXMEMinsn = IDEXinsn;
     uint64_t opcode = insn.opcode();
+
+    // check whether the instruction is load instruction
     if (opcode == 0x63) {
       branch_pc = old_pc;
     }
-    if (detect_data_hazard()) {
+
+    if (detect_data_hazard()) { // if data hazard occurs, stall pipeline
       uint64_t opcode2 = IFIDinsn->opcode();
-      if (opcode == 0x63 || opcode == 0x67 || opcode == 0x6f) {  // if branch or jump, stall twice
+      if (opcode == 0x63 || opcode == 0x67 || opcode == 0x6f) {  // if branch or jump instruction, stall two cycle
           delete (MEMWBinsn);
           MEMWBinsn = EXMEMinsn;
           EXMEMinsn = NULL;
           IDEXinsn = NULL;
-          cycle_count++;
-      } else {  // otherwise, stall once
+          cycle_count++; // since we stalled two cycle, we need to add one more cycle
+      } else {  // otherwise, stall one cycle
           IDEXinsn = NULL;
       }
-      return old_pc;
+      return old_pc; // return old_pc to re-fetch same instruction in next cycle
     }
-    else {
-      if (IFIDinsn && detect_control_hazard(old_pc)) {  // if branch is taken
-          delete (MEMWBinsn);
-          MEMWBinsn = EXMEMinsn;
-          EXMEMinsn = IFIDinsn;
-          IDEXinsn = NULL;
-          IFIDinsn = new insn_t(insn);
-          cycle_count++;
-      } else {  // if branch is not taken
-          IDEXinsn = IFIDinsn;
-          IFIDinsn = new insn_t(insn);
+    else { // if data hazard does not occur
+      if (IFIDinsn && detect_control_hazard(old_pc)) {  // branch is taken
+        // if branch is taken, penalty should be paid.
+        // however SPIKE doesn't simulate pipeline and branch prediction.
+        // to simulate this, we need to flush instruction in IF stage and stall one cycle.
+        delete (MEMWBinsn);
+        MEMWBinsn = EXMEMinsn;
+        EXMEMinsn = IFIDinsn;
+        IDEXinsn = NULL;
+        IFIDinsn = new insn_t(insn);
+        cycle_count++;
+      } else {  // branch is not taken
+        // if branch is not taken, we need to update pipeline normally.
+        IDEXinsn = IFIDinsn;
+        IFIDinsn = new insn_t(insn);
       }
-      return execute_insn(p, old_pc, fetch);
+      return execute_insn(p, old_pc, fetch); // return new_pc to fetch next instruction
     }
   }
 
-  return execute_insn(p, old_pc, fetch);
+  return execute_insn(p, old_pc, fetch); // return new_pc to fetch next instruction
 }
 
 bool processor_t::slow_path()
@@ -572,7 +592,7 @@ void processor_t::step(size_t n)
   while (n > 0) {
     size_t instret = 0;
     reg_t pc = state.pc;
-    reg_t old_pc;
+    reg_t old_pc; // address of the instruction which is to be executed in this cycle
     mmu_t* _mmu = mmu;
 
     #define advance_pc() \
@@ -624,27 +644,8 @@ void processor_t::step(size_t n)
         // Main simulation loop, fast path.
         for (auto ic_entry = _mmu->access_icache(pc); ; ) {
           auto fetch = ic_entry->data;
-          old_pc = pc;
-          pc = update_pipeline(fetch.insn, old_pc, fetch, this);
-          // old_pc = pc;
-          // if(b_trap) {
-          //   if (old_pc == trap_ret)
-          //     b_trap = false;
-          // }
-          // pc = execute_insn(this, pc, fetch);
-          // if (old_pc == 0x0000000000010178) {
-          //   b_main = true;
-          // }
-          // if (pc == 0x000000000001017C) {
-          //   flush_pipeline();
-          //   printf("%ld\n", cycle_count);
-          //   b_main = false;
-          // }
-          // if (b_main && !b_trap) {
-          //   cycle_count++;
-          //   inst_count++;
-          //   pc = update_pipeline(fetch.insn, old_pc, pc, fetch, this);
-          // }
+          old_pc = pc; // save address of the instruction which is to be executed in this cycle
+          pc = update_pipeline(fetch.insn, old_pc, fetch, this); // update pipeline, return value is address of the instruction which is to be executed in next cycle
           ic_entry = ic_entry->next;
           if (unlikely(ic_entry->tag != pc))
             break;
@@ -659,11 +660,12 @@ void processor_t::step(size_t n)
     }
     catch(trap_t& t)
     {
-      if (b_main) {
+      if (b_main) { // if we are in main function
         insn_t insn = _mmu->access_icache(old_pc)->data.insn;
-        const char *name = decode_inst(insn);
+        const char *name = decode_inst(insn); // decode name of current instruction
         b_trap = true;
-        if(strcmp(name, "ecall") == 0) {
+        if(strcmp(name, "ecall") == 0) { // current instruction is ecall
+          // if current instruction is ecall, stall pipeline once to simulate nop and wait for trap handler to be over
           trap_ret = pc + 0x4;
           delete (MEMWBinsn);
           MEMWBinsn = EXMEMinsn;
@@ -672,7 +674,8 @@ void processor_t::step(size_t n)
           IFIDinsn = NULL;
           cycle_count++;
         }
-        else {
+        else { // current instruction is not ecall
+          // if current instruction is not ecall, simply wait for trap handler to be over
           trap_ret = pc;
         }
       }
