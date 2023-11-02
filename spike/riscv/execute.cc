@@ -10,271 +10,13 @@ bool b_trap = false;
 uint64_t cycle_count = 0;
 uint64_t inst_count = 0;
 reg_t trap_ret;
+reg_t branch_pc;
 const char *MEMREAD[] = {"lb", "lh", "lw", "ld", "lbu", "lhu", "lwu"};
 
-struct insn_t *IFIDinsn = NULL;
-struct insn_t *IDEXinsn = NULL;
-struct insn_t *EXMEMinsn = NULL;
-struct insn_t *MEMWBinsn = NULL;
-
-const char *decode_inst(insn_t &insn) {
-    uint64_t opcode = insn.opcode();
-    uint64_t funct3 = insn.funct3();
-    uint64_t funct7 = insn.funct7();
-    char type;
-    switch (opcode) {
-        case 0x33:
-            type = 'R';
-            break;
-        case 0x73:
-            type = 'E';
-            break;
-        case 0x13:
-            type = 'i';
-            break;
-        case 0x1b:
-            type = 'w';
-            break;
-        case 0x3b:
-            type = 'W';
-            break;
-        case 0x03:
-            type = 'I';
-            break;
-        case 0x23:
-            type = 'S';
-            break;
-        case 0x63:
-            type = 'B';
-            break;
-        case 0x6f:
-            return "jal";
-        case 0x67:
-            return "jalr";
-        case 0x17:
-            return "auipc";
-        case 0x37:
-            return "lui";
-        case 0x0f:
-            type = 'F';
-            break;
-        default:
-            return "unknown";
-    }
-
-    switch (type) {
-        case 'R':
-            switch (funct3) {
-                case 0x00:
-                    return (funct7 == 0x00 ? "add" : "sub");
-                case 0x07:
-                    return "and";
-                case 0x06:
-                    return "or";
-                case 0x04:
-                    return "xor";
-                case 0x01:
-                    return "sll";
-                case 0x05:
-                    return (funct7 == 0x00 ? "srl" : "sra");
-                case 0x02:
-                    return "slt";
-                case 0x03:
-                    return "sltu";
-                default:
-                    return "unknown";
-            }
-        case 'i':
-            switch (funct3) {
-                case 0x00:
-                    return "addi";
-                case 0x07:
-                    return "andi";
-                case 0x06:
-                    return "ori";
-                case 0x04:
-                    return "xori";
-                case 0x01:
-                    return "slli";
-                case 0x05:
-                    return (funct7 == 0x00 ? "srli" : "srai");
-                case 0x02:
-                    return "slti";
-                case 0x03:
-                    return "sltiu";
-                default:
-                    return "unknown";
-            }
-        case 'I':
-            switch (funct3) {
-                case 0x00:
-                    return "lb";
-                case 0x01:
-                    return "lh";
-                case 0x02:
-                    return "lw";
-                case 0x03:
-                    return "ld";
-                case 0x04:
-                    return "lbu";
-                case 0x05:
-                    return "lhu";
-                case 0x06:
-                    return "lwu";
-                default:
-                    return "unknown";
-            }
-        case 'S':
-            switch (funct3) {
-                case 0x00:
-                    return "sb";
-                case 0x01:
-                    return "sh";
-                case 0x02:
-                    return "sw";
-                case 0x03:
-                    return "sd";
-                default:
-                    return "unknown";
-            }
-        case 'B':
-            switch (funct3) {
-                case 0x00:
-                    return "beq";
-                case 0x01:
-                    return "bne";
-                case 0x04:
-                    return "blt";
-                case 0x05:
-                    return "bge";
-                case 0x06:
-                    return "bltu";
-                case 0x07:
-                    return "bgeu";
-                default:
-                    return "unknown";
-            }
-        case 'F':
-            return (funct3 == 0x00 ? "fence" : "fence.i");
-        case 'E':
-            switch (funct3) {
-                case 0x00:
-                    return (insn.i_imm() == 0x0 ? "ecall" : "ebreak");
-                case 0x01:
-                    return "csrrw";
-                case 0x02:
-                    return "csrrs";
-                case 0x03:
-                    return "csrrc";
-                case 0x05:
-                    return "csrrwi";
-                case 0x06:
-                    return "csrrsi";
-                case 0x07:
-                    return "csrrci";
-                default:
-                    return "unknown";
-            }
-        case 'w':
-            switch (funct3) {
-                case 0x00:
-                    return "addiw";
-                case 0x01:
-                    return "slliw";
-                case 0x05:
-                    return (funct7 == 0x00 ? "srliw" : "sraiw");
-                default:
-                    return "unknown";
-            }
-        case 'W':
-            switch (funct3) {
-                case 0x00:
-                    return (funct7 == 0x00 ? "addw" : "subw");
-                case 0x01:
-                    return "sllw";
-                case 0x05:
-                    return (funct7 == 0x00 ? "srlw" : "sraw");
-                default:
-                    return "unknown";
-            }
-    }
-
-    return "unknown";
-}
-
-void print_pipe() {
-  printf("IFIDinsn = %s\n", IFIDinsn != NULL ? decode_inst(*IFIDinsn) : "nop");
-  printf("IDEXinsn = %s\n", IDEXinsn != NULL ? decode_inst(*IDEXinsn) : "nop");
-  printf("EXMEMinsn = %s\n", EXMEMinsn != NULL ? decode_inst(*EXMEMinsn) : "nop");
-  printf("MEMWBinsn = %s\n", MEMWBinsn!= NULL ? decode_inst(*MEMWBinsn) : "nop");
-  printf("\n\n");
-}
-
-bool is_rs2(insn_t &insn) {
-  uint64_t opcode = insn.opcode();
-  
-  // only R, S, B type instruction has rs2
-  switch (opcode) {
-    case 0x23:
-    case 0x33:
-    case 0x63:
-      return true;
-    default:
-      return false;
-  }
-}
-
-bool detect_data_hazard() {
-  if (IFIDinsn && IDEXinsn) {
-    const char *name = decode_inst(*IDEXinsn);
-    bool b_mem_read = false;
-    for (int i = 0; i < 7; i++){
-      if (strcmp(name, MEMREAD[i]) == 0) {
-        b_mem_read = true;
-        break;
-      }
-    }
-    if (b_mem_read) {
-      if (IDEXinsn->rd() == IFIDinsn->rs1() || (is_rs2(*IFIDinsn) && IDEXinsn->rd() == IFIDinsn->rs2())) {
-        return true;
-      }
-    }
-  }
-  return false;
-}
-
-reg_t update_pipeline(insn_t &insn, reg_t old_pc, reg_t pc) {
-  delete (MEMWBinsn);
-  MEMWBinsn = EXMEMinsn;
-  EXMEMinsn = IDEXinsn;
-  if (detect_data_hazard()) {
-    printf("detect data hazard: pc = %lx\tinst = %s\n\n\n", old_pc, decode_inst(insn));
-    IDEXinsn = NULL;
-    print_pipe();
-    return old_pc;
-  }
-  else {
-    IDEXinsn = IFIDinsn;
-    IFIDinsn = new insn_t(insn);
-    return pc;
-  }
-}
-
-void flush_pipeline() {
-  if (IFIDinsn != NULL) {
-    cycle_count += 4;
-  } else if (IDEXinsn != NULL) {
-    cycle_count += 3;
-  } else if (EXMEMinsn != NULL) {
-    cycle_count += 2;
-  } else if (MEMWBinsn != NULL) {
-    cycle_count += 1;
-  }
-  delete(IFIDinsn);
-  delete(IDEXinsn);
-  delete(EXMEMinsn);
-  delete(MEMWBinsn);
-}
+struct insn_fetch_t *IFIDinsn = NULL;
+struct insn_fetch_t *IDEXinsn = NULL;
+struct insn_fetch_t *EXMEMinsn = NULL;
+struct insn_fetch_t *MEMWBinsn = NULL;
 
 #ifdef RISCV_ENABLE_COMMITLOG
 static void commit_log_reset(processor_t* p)
@@ -484,6 +226,292 @@ static inline reg_t execute_insn(processor_t* p, reg_t pc, insn_fetch_t fetch)
   return npc;
 }
 
+inline const char *decode_inst(insn_t &insn) {
+    uint64_t opcode = insn.opcode();
+    uint64_t funct3 = insn.funct3();
+    uint64_t funct7 = insn.funct7();
+    char type;
+    switch (opcode) {
+        case 0x33:
+            type = 'R';
+            break;
+        case 0x73:
+            type = 'E';
+            break;
+        case 0x13:
+            type = 'i';
+            break;
+        case 0x1b:
+            type = 'w';
+            break;
+        case 0x3b:
+            type = 'W';
+            break;
+        case 0x03:
+            type = 'I';
+            break;
+        case 0x23:
+            type = 'S';
+            break;
+        case 0x63:
+            type = 'B';
+            break;
+        case 0x6f:
+            return "jal";
+        case 0x67:
+            return "jalr";
+        case 0x17:
+            return "auipc";
+        case 0x37:
+            return "lui";
+        case 0x0f:
+            type = 'F';
+            break;
+        default:
+            return "unknown";
+    }
+
+    switch (type) {
+        case 'R':
+            switch (funct3) {
+                case 0x00:
+                    return (funct7 == 0x00 ? "add" : "sub");
+                case 0x07:
+                    return "and";
+                case 0x06:
+                    return "or";
+                case 0x04:
+                    return "xor";
+                case 0x01:
+                    return "sll";
+                case 0x05:
+                    return (funct7 == 0x00 ? "srl" : "sra");
+                case 0x02:
+                    return "slt";
+                case 0x03:
+                    return "sltu";
+                default:
+                    return "unknown";
+            }
+        case 'i':
+            switch (funct3) {
+                case 0x00:
+                    return "addi";
+                case 0x07:
+                    return "andi";
+                case 0x06:
+                    return "ori";
+                case 0x04:
+                    return "xori";
+                case 0x01:
+                    return "slli";
+                case 0x05:
+                    return (funct7 == 0x00 ? "srli" : "srai");
+                case 0x02:
+                    return "slti";
+                case 0x03:
+                    return "sltiu";
+                default:
+                    return "unknown";
+            }
+        case 'I':
+            switch (funct3) {
+                case 0x00:
+                    return "lb";
+                case 0x01:
+                    return "lh";
+                case 0x02:
+                    return "lw";
+                case 0x03:
+                    return "ld";
+                case 0x04:
+                    return "lbu";
+                case 0x05:
+                    return "lhu";
+                case 0x06:
+                    return "lwu";
+                default:
+                    return "unknown";
+            }
+        case 'S':
+            switch (funct3) {
+                case 0x00:
+                    return "sb";
+                case 0x01:
+                    return "sh";
+                case 0x02:
+                    return "sw";
+                case 0x03:
+                    return "sd";
+                default:
+                    return "unknown";
+            }
+        case 'B':
+            switch (funct3) {
+                case 0x00:
+                    return "beq";
+                case 0x01:
+                    return "bne";
+                case 0x04:
+                    return "blt";
+                case 0x05:
+                    return "bge";
+                case 0x06:
+                    return "bltu";
+                case 0x07:
+                    return "bgeu";
+                default:
+                    return "unknown";
+            }
+        case 'F':
+            return (funct3 == 0x00 ? "fence" : "fence.i");
+        case 'E':
+            switch (funct3) {
+                case 0x00:
+                    return (insn.i_imm() == 0x0 ? "ecall" : "ebreak");
+                case 0x01:
+                    return "csrrw";
+                case 0x02:
+                    return "csrrs";
+                case 0x03:
+                    return "csrrc";
+                case 0x05:
+                    return "csrrwi";
+                case 0x06:
+                    return "csrrsi";
+                case 0x07:
+                    return "csrrci";
+                default:
+                    return "unknown";
+            }
+        case 'w':
+            switch (funct3) {
+                case 0x00:
+                    return "addiw";
+                case 0x01:
+                    return "slliw";
+                case 0x05:
+                    return (funct7 == 0x00 ? "srliw" : "sraiw");
+                default:
+                    return "unknown";
+            }
+        case 'W':
+            switch (funct3) {
+                case 0x00:
+                    return (funct7 == 0x00 ? "addw" : "subw");
+                case 0x01:
+                    return "sllw";
+                case 0x05:
+                    return (funct7 == 0x00 ? "srlw" : "sraw");
+                default:
+                    return "unknown";
+            }
+    }
+
+    return "unknown";
+}
+
+inline void print_pipe() {
+  printf("IFIDinsn = %s\n", IFIDinsn != NULL ? decode_inst(IFIDinsn->insn) : "nop");
+  printf("IDEXinsn = %s\n", IDEXinsn != NULL ? decode_inst(IDEXinsn->insn) : "nop");
+  printf("EXMEMinsn = %s\n", EXMEMinsn != NULL ? decode_inst(EXMEMinsn->insn) : "nop");
+  printf("MEMWBinsn = %s\n", MEMWBinsn!= NULL ? decode_inst(MEMWBinsn->insn) : "nop");
+  printf("\n\n");
+}
+
+inline bool is_rs2(insn_t &insn) {
+  uint64_t opcode = insn.opcode();
+  
+  // only R, S, B type instruction has rs2
+  switch (opcode) {
+    case 0x23:
+    case 0x33:
+    case 0x63:
+      return true;
+    default:
+      return false;
+  }
+}
+
+inline bool detect_data_hazard() {
+  if (IFIDinsn && IDEXinsn) {
+    const char *name = decode_inst(IDEXinsn->insn);
+    bool b_mem_read = false;
+    for (int i = 0; i < 7; i++){
+      if (strcmp(name, MEMREAD[i]) == 0) {
+        b_mem_read = true;
+        break;
+      }
+    }
+    if (b_mem_read) {
+      if (IDEXinsn->insn.rd() == IFIDinsn->insn.rs1() || (is_rs2(IFIDinsn->insn) && IDEXinsn->insn.rd() == IFIDinsn->insn.rs2())) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+inline bool detect_control_hazard(reg_t old_pc, reg_t pc, processor_t *p) {
+  uint64_t opcode = IFIDinsn->insn.opcode();
+  if (opcode == 0x63 && ((branch_pc + 0x4) != old_pc)) {
+    return true;
+  }
+  return false;
+}
+
+inline reg_t update_pipeline(insn_fetch_t &fetch, reg_t old_pc, reg_t pc, processor_t *p) {
+  delete (MEMWBinsn);
+  MEMWBinsn = EXMEMinsn;
+  EXMEMinsn = IDEXinsn;
+  uint64_t opcode = fetch.insn.opcode();
+  if (opcode == 0x63) {
+    printf("branch detected\tpc:%lx\n", old_pc);
+    branch_pc = old_pc;
+  }
+  if (detect_data_hazard()) {
+    printf("data hazard detected\n");
+    IDEXinsn = NULL;
+    print_pipe();
+    return old_pc;
+  }
+  else {
+    if (IFIDinsn && detect_control_hazard(old_pc, pc, p)) { // if branch is taken
+      printf("control hazard detected\n");
+      // IDEXinsn = NULL;
+      delete (MEMWBinsn);
+      MEMWBinsn = IDEXinsn;
+      EXMEMinsn = IFIDinsn;
+      IDEXinsn = NULL;
+      IFIDinsn = new insn_fetch_t(fetch);
+      cycle_count++;
+      print_pipe();
+    }
+    else { // if branch is not taken
+      IDEXinsn = IFIDinsn;
+      IFIDinsn = new insn_fetch_t(fetch);
+      print_pipe();
+    }
+    return pc;
+  }
+}
+
+inline void flush_pipeline() {
+  if (IFIDinsn != NULL) {
+    cycle_count += 4;
+  } else if (IDEXinsn != NULL) {
+    cycle_count += 3;
+  } else if (EXMEMinsn != NULL) {
+    cycle_count += 2;
+  } else if (MEMWBinsn != NULL) {
+    cycle_count += 1;
+  }
+  delete(IFIDinsn);
+  delete(IDEXinsn);
+  delete(EXMEMinsn);
+  delete(MEMWBinsn);
+}
+
 bool processor_t::slow_path()
 {
   return debug || state.single_step != state.STEP_NONE || state.debug_mode;
@@ -563,22 +591,20 @@ void processor_t::step(size_t n)
             b_trap = false;
           }
           pc = execute_insn(this, pc, fetch);
-          if (pc == 0x0000000000010178) {
+          if (old_pc == 0x0000000000010178) {
             b_main = true;
-          }
-          if (b_main && !b_trap) {
-              std::cout << disassembler->disassemble(fetch.insn);
-              printf("\tinsn: %s", decode_inst(fetch.insn));
-              printf("\told_pc = %lx\n", old_pc);
-              cycle_count++;
-              inst_count++;
-              pc = update_pipeline(fetch.insn, old_pc, pc);
           }
           if (pc == 0x000000000001017C) {
             flush_pipeline();
             printf("cycle count: %ld\n", cycle_count);
             printf("inst count: %ld\n", inst_count);
             b_main = false;
+          }
+          if (b_main && !b_trap) {
+            printf("insn: %s\told_pc: %lx\tpc: %lx\n", decode_inst(fetch.insn), old_pc, pc);
+            cycle_count++;
+            inst_count++;
+            pc = update_pipeline(fetch, old_pc, pc, this);
           }
           ic_entry = ic_entry->next;
           if (unlikely(ic_entry->tag != pc))
