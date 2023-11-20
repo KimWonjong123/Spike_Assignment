@@ -15,7 +15,196 @@ const char *MEMREAD[] = {"lb", "lh", "lw", "ld", "lbu", "lhu", "lwu"}; // memory
 struct insn_t *IFIDinsn = NULL; // instruction in IF/ID pipeline register
 struct insn_t *IDEXinsn = NULL; // instruction in ID/EX pipeline register
 struct insn_t *EXMEMinsn = NULL; // instruction in EX/MEM pipeline register
-struct insn_t *MEMWBinsn = NULL; // instruction in MEM/WB pipeline register
+struct insn_t *MEMWBinsn = NULL;  // instruction in MEM/WB pipeline register
+
+// decode a 32-bit instruction
+inline const char *decode_inst(insn_t &insn) {
+    uint64_t opcode = insn.opcode();
+    uint64_t funct3 = insn.funct3();
+    uint64_t funct7 = insn.funct7();
+    char type;  // type of instruction
+
+    // decode opcode
+    switch (opcode) {
+        case 0x33:
+            type = 'R';
+            break;
+        case 0x73:
+            type = 'E';
+            break;
+        case 0x13:
+            type = 'i';
+            break;
+        case 0x1b:
+            type = 'w';
+            break;
+        case 0x3b:
+            type = 'W';
+            break;
+        case 0x03:
+            type = 'I';
+            break;
+        case 0x23:
+            type = 'S';
+            break;
+        case 0x63:
+            type = 'B';
+            break;
+        case 0x6f:
+            return "jal";
+        case 0x67:
+            return "jalr";
+        case 0x17:
+            return "auipc";
+        case 0x37:
+            return "lui";
+        case 0x0f:
+            type = 'F';
+            break;
+        default:
+            return "unknown";
+    }
+
+    // decode funct3 and funct7 based on opcode
+    switch (type) {
+        case 'R':
+            switch (funct3) {
+                case 0x00:
+                    return (funct7 == 0x00 ? "add" : "sub");
+                case 0x07:
+                    return "and";
+                case 0x06:
+                    return "or";
+                case 0x04:
+                    return "xor";
+                case 0x01:
+                    return "sll";
+                case 0x05:
+                    return (funct7 == 0x00 ? "srl" : "sra");
+                case 0x02:
+                    return "slt";
+                case 0x03:
+                    return "sltu";
+                default:
+                    return "unknown";
+            }
+        case 'i':
+            switch (funct3) {
+                case 0x00:
+                    return "addi";
+                case 0x07:
+                    return "andi";
+                case 0x06:
+                    return "ori";
+                case 0x04:
+                    return "xori";
+                case 0x01:
+                    return "slli";
+                case 0x05:
+                    return (funct7 == 0x00 ? "srli" : "srai");
+                case 0x02:
+                    return "slti";
+                case 0x03:
+                    return "sltiu";
+                default:
+                    return "unknown";
+            }
+        case 'I':
+            switch (funct3) {
+                case 0x00:
+                    return "lb";
+                case 0x01:
+                    return "lh";
+                case 0x02:
+                    return "lw";
+                case 0x03:
+                    return "ld";
+                case 0x04:
+                    return "lbu";
+                case 0x05:
+                    return "lhu";
+                case 0x06:
+                    return "lwu";
+                default:
+                    return "unknown";
+            }
+        case 'S':
+            switch (funct3) {
+                case 0x00:
+                    return "sb";
+                case 0x01:
+                    return "sh";
+                case 0x02:
+                    return "sw";
+                case 0x03:
+                    return "sd";
+                default:
+                    return "unknown";
+            }
+        case 'B':
+            switch (funct3) {
+                case 0x00:
+                    return "beq";
+                case 0x01:
+                    return "bne";
+                case 0x04:
+                    return "blt";
+                case 0x05:
+                    return "bge";
+                case 0x06:
+                    return "bltu";
+                case 0x07:
+                    return "bgeu";
+                default:
+                    return "unknown";
+            }
+        case 'F':
+            return (funct3 == 0x00 ? "fence" : "fence.i");
+        case 'E':
+            switch (funct3) {
+                case 0x00:
+                    return (insn.i_imm() == 0x0 ? "ecall" : "ebreak");
+                case 0x01:
+                    return "csrrw";
+                case 0x02:
+                    return "csrrs";
+                case 0x03:
+                    return "csrrc";
+                case 0x05:
+                    return "csrrwi";
+                case 0x06:
+                    return "csrrsi";
+                case 0x07:
+                    return "csrrci";
+                default:
+                    return "unknown";
+            }
+        case 'w':
+            switch (funct3) {
+                case 0x00:
+                    return "addiw";
+                case 0x01:
+                    return "slliw";
+                case 0x05:
+                    return (funct7 == 0x00 ? "srliw" : "sraiw");
+                default:
+                    return "unknown";
+            }
+        case 'W':
+            switch (funct3) {
+                case 0x00:
+                    return (funct7 == 0x00 ? "addw" : "subw");
+                case 0x01:
+                    return "sllw";
+                case 0x05:
+                    return (funct7 == 0x00 ? "srlw" : "sraw");
+                default:
+                    return "unknown";
+            }
+    }
+
+    return "unknown";
+}
 
 #ifdef RISCV_ENABLE_COMMITLOG
 static void commit_log_reset(processor_t* p)
@@ -225,195 +414,6 @@ static inline reg_t execute_insn(processor_t* p, reg_t pc, insn_fetch_t fetch)
   return npc;
 }
 
-// decode a 32-bit instruction
-inline const char *decode_inst(insn_t &insn) {
-    uint64_t opcode = insn.opcode();
-    uint64_t funct3 = insn.funct3();
-    uint64_t funct7 = insn.funct7();
-    char type; // type of instruction
-
-    // decode opcode
-    switch (opcode) {
-        case 0x33:
-            type = 'R';
-            break;
-        case 0x73:
-            type = 'E';
-            break;
-        case 0x13:
-            type = 'i';
-            break;
-        case 0x1b:
-            type = 'w';
-            break;
-        case 0x3b:
-            type = 'W';
-            break;
-        case 0x03:
-            type = 'I';
-            break;
-        case 0x23:
-            type = 'S';
-            break;
-        case 0x63:
-            type = 'B';
-            break;
-        case 0x6f:
-            return "jal";
-        case 0x67:
-            return "jalr";
-        case 0x17:
-            return "auipc";
-        case 0x37:
-            return "lui";
-        case 0x0f:
-            type = 'F';
-            break;
-        default:
-            return "unknown";
-    }
-
-    // decode funct3 and funct7 based on opcode
-    switch (type) {
-        case 'R':
-            switch (funct3) {
-                case 0x00:
-                    return (funct7 == 0x00 ? "add" : "sub");
-                case 0x07:
-                    return "and";
-                case 0x06:
-                    return "or";
-                case 0x04:
-                    return "xor";
-                case 0x01:
-                    return "sll";
-                case 0x05:
-                    return (funct7 == 0x00 ? "srl" : "sra");
-                case 0x02:
-                    return "slt";
-                case 0x03:
-                    return "sltu";
-                default:
-                    return "unknown";
-            }
-        case 'i':
-            switch (funct3) {
-                case 0x00:
-                    return "addi";
-                case 0x07:
-                    return "andi";
-                case 0x06:
-                    return "ori";
-                case 0x04:
-                    return "xori";
-                case 0x01:
-                    return "slli";
-                case 0x05:
-                    return (funct7 == 0x00 ? "srli" : "srai");
-                case 0x02:
-                    return "slti";
-                case 0x03:
-                    return "sltiu";
-                default:
-                    return "unknown";
-            }
-        case 'I':
-            switch (funct3) {
-                case 0x00:
-                    return "lb";
-                case 0x01:
-                    return "lh";
-                case 0x02:
-                    return "lw";
-                case 0x03:
-                    return "ld";
-                case 0x04:
-                    return "lbu";
-                case 0x05:
-                    return "lhu";
-                case 0x06:
-                    return "lwu";
-                default:
-                    return "unknown";
-            }
-        case 'S':
-            switch (funct3) {
-                case 0x00:
-                    return "sb";
-                case 0x01:
-                    return "sh";
-                case 0x02:
-                    return "sw";
-                case 0x03:
-                    return "sd";
-                default:
-                    return "unknown";
-            }
-        case 'B':
-            switch (funct3) {
-                case 0x00:
-                    return "beq";
-                case 0x01:
-                    return "bne";
-                case 0x04:
-                    return "blt";
-                case 0x05:
-                    return "bge";
-                case 0x06:
-                    return "bltu";
-                case 0x07:
-                    return "bgeu";
-                default:
-                    return "unknown";
-            }
-        case 'F':
-            return (funct3 == 0x00 ? "fence" : "fence.i");
-        case 'E':
-            switch (funct3) {
-                case 0x00:
-                    return (insn.i_imm() == 0x0 ? "ecall" : "ebreak");
-                case 0x01:
-                    return "csrrw";
-                case 0x02:
-                    return "csrrs";
-                case 0x03:
-                    return "csrrc";
-                case 0x05:
-                    return "csrrwi";
-                case 0x06:
-                    return "csrrsi";
-                case 0x07:
-                    return "csrrci";
-                default:
-                    return "unknown";
-            }
-        case 'w':
-            switch (funct3) {
-                case 0x00:
-                    return "addiw";
-                case 0x01:
-                    return "slliw";
-                case 0x05:
-                    return (funct7 == 0x00 ? "srliw" : "sraiw");
-                default:
-                    return "unknown";
-            }
-        case 'W':
-            switch (funct3) {
-                case 0x00:
-                    return (funct7 == 0x00 ? "addw" : "subw");
-                case 0x01:
-                    return "sllw";
-                case 0x05:
-                    return (funct7 == 0x00 ? "srlw" : "sraw");
-                default:
-                    return "unknown";
-            }
-    }
-
-    return "unknown";
-}
-
 // check whether the instruction has rs1 field or not based on opcode and funct3 part
 inline bool is_rs1(insn_t &insn) {
   uint64_t opcode = insn.opcode();
@@ -501,8 +501,9 @@ inline void flush_pipeline() {
 inline reg_t update_pipeline(insn_t &insn, reg_t old_pc, insn_fetch_t fetch, processor_t* p) {
   // check whether trap handler is over
   if(b_trap) {
-    if (old_pc == trap_ret)
+    if (old_pc == trap_ret) {
       b_trap = false;
+    }
   }
 
   // check whether we are entering main function
@@ -513,15 +514,14 @@ inline reg_t update_pipeline(insn_t &insn, reg_t old_pc, insn_fetch_t fetch, pro
 
   // check whether we are returning from main function
   if (old_pc == 0x000000000001017C) {
-    flush_pipeline();
-    printf("%ld\n", cycle_count);
-    b_main = false;
-    return execute_insn(p, old_pc, fetch);
+      flush_pipeline();
+      printf("%ld\n", cycle_count);
+      b_main = false;
+      return execute_insn(p, old_pc, fetch);
   }
 
   // check whether we are in main function and not in trap handler
   if (b_main && !b_trap) {
-    cycle_count++;
 
     // update pipeline
     delete (MEMWBinsn);
@@ -541,9 +541,10 @@ inline reg_t update_pipeline(insn_t &insn, reg_t old_pc, insn_fetch_t fetch, pro
           MEMWBinsn = EXMEMinsn;
           EXMEMinsn = NULL;
           IDEXinsn = NULL;
-          cycle_count++; // since we stalled two cycle, we need to add one more cycle
+          cycle_count += 2; // since we stalled two cycle, we need to add two cycle
       } else {  // otherwise, stall one cycle
           IDEXinsn = NULL;
+          cycle_count++;
       }
       return old_pc; // return old_pc to re-fetch same instruction in next cycle
     }
@@ -551,17 +552,19 @@ inline reg_t update_pipeline(insn_t &insn, reg_t old_pc, insn_fetch_t fetch, pro
       if (IFIDinsn && detect_control_hazard(old_pc)) {  // branch is taken
         // if branch is taken, penalty should be paid.
         // however SPIKE doesn't simulate pipeline and branch prediction.
-        // to simulate this, we need to flush instruction in IF stage and stall one cycle.
+        // in real world, we need to flush ID stage instruction.
+        // but since we are simulating pipeling, we can simply mock that behavior by stalling pipeline.
         delete (MEMWBinsn);
         MEMWBinsn = EXMEMinsn;
         EXMEMinsn = IFIDinsn;
         IDEXinsn = NULL;
         IFIDinsn = new insn_t(insn);
-        cycle_count++;
+        cycle_count += 2; // we are "simulating" branch prediction in this case, so we need to add two cycle
       } else {  // branch is not taken
         // if branch is not taken, we need to update pipeline normally.
         IDEXinsn = IFIDinsn;
         IFIDinsn = new insn_t(insn);
+        cycle_count++;
       }
       return execute_insn(p, old_pc, fetch); // return new_pc to fetch next instruction
     }
@@ -663,20 +666,22 @@ void processor_t::step(size_t n)
       if (b_main) { // if we are in main function
         insn_t insn = _mmu->access_icache(old_pc)->data.insn;
         const char *name = decode_inst(insn); // decode name of current instruction
-        b_trap = true;
-        if(strcmp(name, "ecall") == 0) { // current instruction is ecall
-          // if current instruction is ecall, stall pipeline once to simulate nop and wait for trap handler to be over
-          trap_ret = pc + 0x4;
-          delete (MEMWBinsn);
-          MEMWBinsn = EXMEMinsn;
-          EXMEMinsn = IDEXinsn;
-          IDEXinsn = IFIDinsn;
-          IFIDinsn = NULL;
-          cycle_count++;
-        }
-        else { // current instruction is not ecall
-          // if current instruction is not ecall, simply wait for trap handler to be over
-          trap_ret = pc;
+        if (!b_trap){ // check whether it is nested trap
+          b_trap = true;
+          if(strcmp(name, "ecall") == 0) { // current instruction is ecall
+            // if current instruction is ecall, stall pipeline once to simulate nop and wait for trap handler to be over
+            trap_ret = pc + 0x4;
+            delete (MEMWBinsn);
+            MEMWBinsn = EXMEMinsn;
+            EXMEMinsn = IDEXinsn;
+            IDEXinsn = IFIDinsn;
+            IFIDinsn = NULL;
+          }
+          else { // current instruction is not ecall
+            // if current instruction is not ecall, simply wait for trap handler to be over
+            trap_ret = pc;
+            cycle_count -= old_pc == pc ? 1 : 0; // if current instruction is nor branch and jump, we need to subtract one cycle
+          }
         }
       }
       take_trap(t, pc);
