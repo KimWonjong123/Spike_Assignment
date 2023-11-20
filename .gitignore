@@ -1,1 +1,4 @@
 /spike/build
+/build
+*.txt
+*.tar
