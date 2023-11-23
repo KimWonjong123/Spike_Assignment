@@ -6,8 +6,8 @@
 #include <iostream>
 #include <iomanip>
 
-cache_sim_t::cache_sim_t(size_t _sets, size_t _ways, size_t _linesz, const char* _name)
-: sets(_sets), ways(_ways), linesz(_linesz), name(_name), log(false)
+cache_sim_t::cache_sim_t(size_t _sets, size_t _ways, size_t _linesz, const char* _name, char policy)
+: sets(_sets), ways(_ways), linesz(_linesz), policy(policy), name(_name), log(false)
 {
   init();
 }
@@ -21,20 +21,26 @@ static void help()
   exit(1);
 }
 
+// TODO: parse policy from config string
 cache_sim_t* cache_sim_t::construct(const char* config, const char* name)
 {
   const char* wp = strchr(config, ':');
   if (!wp++) help();
   const char* bp = strchr(wp, ':');
   if (!bp++) help();
+  const char* policyp = strchr(bp, ':');
+  if (!policyp++) help();
 
   size_t sets = atoi(std::string(config, wp).c_str());
   size_t ways = atoi(std::string(wp, bp).c_str());
   size_t linesz = atoi(bp);
+  char policy = *policyp;
+  if (policy != 'R' && policy != 'L' && policy != 'F')
+    policy = 'R';
 
   if (ways > 4 /* empirical */ && sets == 1)
-    return new fa_cache_sim_t(ways, linesz, name);
-  return new cache_sim_t(sets, ways, linesz, name);
+    return new fa_cache_sim_t(ways, linesz, name, policy);
+  return new cache_sim_t(sets, ways, linesz, name, policy);
 }
 
 void cache_sim_t::init()
@@ -62,7 +68,7 @@ void cache_sim_t::init()
 
 cache_sim_t::cache_sim_t(const cache_sim_t& rhs)
  : sets(rhs.sets), ways(rhs.ways), linesz(rhs.linesz),
-   idx_shift(rhs.idx_shift), name(rhs.name), log(false)
+   idx_shift(rhs.idx_shift), policy(rhs.policy), name(rhs.name), log(false)
 {
   tags = new uint64_t[sets*ways];
   memcpy(tags, rhs.tags, sets*ways*sizeof(uint64_t));
@@ -127,13 +133,14 @@ void cache_sim_t::access(uint64_t addr, size_t bytes, bool store)
   (store ? bytes_written : bytes_read) += bytes;
 
   uint64_t* hit_way = check_tag(addr);
-  if (likely(hit_way != NULL))
+  if (likely(hit_way != NULL)) // cache hit
   {
     if (store)
       *hit_way |= DIRTY;
     return;
   }
 
+// cache miss
   store ? write_misses++ : read_misses++;
   if (log)
   {
@@ -144,23 +151,23 @@ void cache_sim_t::access(uint64_t addr, size_t bytes, bool store)
 
   uint64_t victim = victimize(addr);
 
-  if ((victim & (VALID | DIRTY)) == (VALID | DIRTY))
+  if ((victim & (VALID | DIRTY)) == (VALID | DIRTY)) // if dirty and valid, write back
   {
     uint64_t dirty_addr = (victim & ~(VALID | DIRTY)) << idx_shift;
-    if (miss_handler)
+    if (miss_handler) // L2 cache??
       miss_handler->access(dirty_addr, linesz, true);
     writebacks++;
   }
 
-  if (miss_handler)
+  if (miss_handler) // if invalid or clean, read from next level
     miss_handler->access(addr & ~(linesz-1), linesz, false);
 
   if (store)
     *check_tag(addr) |= DIRTY;
 }
 
-fa_cache_sim_t::fa_cache_sim_t(size_t ways, size_t linesz, const char* name)
-  : cache_sim_t(1, ways, linesz, name)
+fa_cache_sim_t::fa_cache_sim_t(size_t ways, size_t linesz, const char* name, char policy)
+  : cache_sim_t(1, ways, linesz, name, policy)
 {
 }
 
@@ -183,3 +190,4 @@ uint64_t fa_cache_sim_t::victimize(uint64_t addr)
   tags[addr >> idx_shift] = (addr >> idx_shift) | VALID;
   return old_tag;
 }
+

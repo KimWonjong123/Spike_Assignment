@@ -22,7 +22,7 @@ class lfsr_t
 class cache_sim_t
 {
  public:
-  cache_sim_t(size_t sets, size_t ways, size_t linesz, const char* name);
+  cache_sim_t(size_t sets, size_t ways, size_t linesz, const char* name, char policy);
   cache_sim_t(const cache_sim_t& rhs);
   virtual ~cache_sim_t();
 
@@ -33,6 +33,7 @@ class cache_sim_t
 
   static cache_sim_t* construct(const char* config, const char* name);
 
+// TODO: add policy mode variable and parse it from config string
  protected:
   static const uint64_t VALID = 1ULL << 63;
   static const uint64_t DIRTY = 1ULL << 62;
@@ -47,6 +48,7 @@ class cache_sim_t
   size_t ways;
   size_t linesz;
   size_t idx_shift;
+  char policy; // cache replacement policy, R: random, L: LRU, F: FIFO
 
   uint64_t* tags;
   
@@ -67,7 +69,7 @@ class cache_sim_t
 class fa_cache_sim_t : public cache_sim_t
 {
  public:
-  fa_cache_sim_t(size_t ways, size_t linesz, const char* name);
+  fa_cache_sim_t(size_t ways, size_t linesz, const char* name, char policy);
   uint64_t* check_tag(uint64_t addr);
   uint64_t victimize(uint64_t addr);
  private:
@@ -128,3 +130,4 @@ class dcache_sim_t : public cache_memtracer_t
 };
 
 #endif
+
