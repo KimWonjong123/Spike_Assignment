@@ -8,6 +8,7 @@
 #include <string>
 #include <map>
 #include <cstdint>
+#include <vector>
 
 class lfsr_t
 {
@@ -33,7 +34,6 @@ class cache_sim_t
 
   static cache_sim_t* construct(const char* config, const char* name);
 
-// TODO: add policy mode variable and parse it from config string
  protected:
   static const uint64_t VALID = 1ULL << 63;
   static const uint64_t DIRTY = 1ULL << 62;
@@ -51,7 +51,15 @@ class cache_sim_t
   char policy; // cache replacement policy, R: random, L: LRU, F: FIFO
 
   uint64_t* tags;
-  
+
+  /*
+    tag table for LRU and FIFO
+    tag_table is a array of vectors, each vector is a set
+    used vector instead of queue to pop arbitrary element in LRU policy
+    each set contains tags in the set
+  */
+  std::vector<uint64_t> *tag_table;
+
   uint64_t read_accesses;
   uint64_t read_misses;
   uint64_t bytes_read;
