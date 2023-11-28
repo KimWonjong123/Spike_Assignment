@@ -117,24 +117,14 @@ uint64_t* cache_sim_t::check_tag(uint64_t addr)
   size_t tag = (addr >> idx_shift) | VALID;
 
   // search tag table for tag
-  for (size_t i = 0; i < ways; i++)
-  {
-    auto it = find(tag_table[idx].begin(), tag_table[idx].end(), tag);
-    if (it != tag_table[idx].end())
-    {
-      return &*it;
-    }
-  }
-
-  return NULL;
+  auto it = find(tag_table[idx].begin(), tag_table[idx].end(), tag);
+  return it == tag_table[idx].end() ? NULL : &*it;
 }
 
 uint64_t cache_sim_t::victimize(uint64_t addr)
 {
   size_t idx = (addr >> idx_shift) & (sets-1);
   size_t way = lfsr.next() % ways;
-  // uint64_t victim = tags[idx*ways + way];
-  // tags[idx*ways + way] = (addr >> idx_shift) | VALID;
   uint64_t victim = tag_table[idx][way]; // select random tag in same set in tag table for Random policy
 
   if (policy == 'F' || policy == 'L') // if FIFO or LRU, update tag table
@@ -168,9 +158,10 @@ void cache_sim_t::access(uint64_t addr, size_t bytes, bool store)
     if (policy == 'L') // if LRU, find and erase "hit tag" and then push back to update LRU
     {
       size_t idx = (addr >> idx_shift) & (sets-1);
-      auto it = find(tag_table[idx].begin(), tag_table[idx].end(), *hit_way);
+      size_t tag = (addr >> idx_shift) | VALID;
+      auto it = find(tag_table[idx].begin(), tag_table[idx].end(), tag);
       tag_table[idx].erase(it);
-      tag_table[idx].push_back(*hit_way);
+      tag_table[idx].push_back(tag);
     }
     if (store)
       *hit_way |= DIRTY;
@@ -196,7 +187,7 @@ void cache_sim_t::access(uint64_t addr, size_t bytes, bool store)
     writebacks++;
   }
 
-  if (miss_handler) // if invalid or clean, read from next level
+  if (miss_handler) // read from next level
     miss_handler->access(addr & ~(linesz-1), linesz, false);
 
   if (store)
